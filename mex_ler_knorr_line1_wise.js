@@ -6,8 +6,6 @@ try{
   var secPubNub=0;
 var Fillerct = null,
     Fillerresults = null,
-    CntInFiller = null,
-    CntOutFiller = null,
     Filleractual = 0,
     Fillertime = 0,
     Fillersec = 0,
@@ -17,10 +15,16 @@ var Fillerct = null,
     FillerspeedTemp = 0,
     FillerflagPrint = 0,
     FillersecStop = 0,
-    FillerONS = false,
-    FillertimeStop = 60, //NOTE: Timestop
-    FillerWorktime = 0.99, //NOTE: Intervalo de tiempo en minutos para actualizar el log
-    FillerflagRunning = false;
+    FillerdeltaRejected = null,
+    FillerONS = 0,
+    FillerStartTime = null,
+    FillertimeStop = 30, //NOTE: Timestop
+    FillerWorktime = 60, //NOTE: 60 si la máquina trabaja continuamente, 3 sí tarda entre 40 y 60 segundos en "operar"
+    FillerflagRunning = false,
+    FillerRejectFlag = false,
+    FillerReject,
+    CntOutFiller=null,
+    CntInFiller=null;
 var PBoxFormerct = null,
     PBoxFormerresults = null,
     CntInPBoxFormer = null,
@@ -139,7 +143,25 @@ var client3 = modbus.client.tcp.complete({
   'logEnabled': true,
   'reconnectTimeout' : 30000
 });
+var FillerVerify = function(){
+      try{
+        FillerReject = fs.readFileSync('FillerRejected.json');
+        if(FillerReject.toString().indexOf('}') > 0 && FillerReject.toString().indexOf('{\"rejected\":') != -1){
+          FillerReject = JSON.parse(FillerReject);
+        }else{
+          throw 12121212;
+        }
+      }catch(err){
+        if(err.code == 'ENOENT' || err == 12121212){
+          fs.writeFileSync('FillerRejected.json','{"rejected":0}'); //NOTE: Change the object to what it usually is.
+          FillerReject = {
+            rejected : 0
+          };
+        }
+      }
+    };
 
+FillerVerify();
 try{
   client1.connect();
   client2.connect();
@@ -204,66 +226,84 @@ client1.on('connect', function(err) {
           CntInPBoxFormer = (joinWord(resp.register[2], resp.register[3]) + joinWord(resp.register[4], resp.register[5]) + joinWord(resp.register[6], resp.register[7]) + joinWord(resp.register[8], resp.register[9]))*2;
           CntOutFiller = CntInPBoxFormer;
           CntOutPBoxFormer = Math.floor(CntInPBoxFormer/2);
-        //------------------------------------------Filler----------------------------------------------
-              Fillerct = CntOutFiller // NOTE: igualar al contador de salida
-              if (!FillerONS && Fillerct) {
-                FillerspeedTemp = Fillerct
-                Fillersec = Date.now()
-                FillerONS = true
-                Fillertime = Date.now()
-              }
-              if(Fillerct > Filleractual){
-                if(FillerflagStopped){
-                  Fillerspeed = Fillerct - FillerspeedTemp
-                  FillerspeedTemp = Fillerct
-                  Fillersec = Date.now()
-                  Fillertime = Date.now()
+          //------------------------------------------Filler----------------------------------------------
+                Fillerct = CntOutFiller; // NOTE: igualar al contador de salida
+                if (FillerONS == 0 && Fillerct) {
+                  FillerspeedTemp = Fillerct;
+                  FillerStartTime = Date.now();
+                  FillerONS = 1;
                 }
-                FillersecStop = 0
-                Fillerstate = 1
-                FillerflagStopped = false
-                FillerflagRunning = true
-              } else if( Fillerct == Filleractual ){
-                if(FillersecStop == 0){
-                  Fillertime = Date.now()
-                  FillersecStop = Date.now()
+                if(Fillerct > Filleractual){
+                  if(FillerflagStopped){
+                    Fillerspeed = Fillerct -FillerspeedTemp;
+                    FillerspeedTemp = Fillerct;
+                    Fillersec = 0;
+                    FillerStartTime = Date.now();
+                    FillerdeltaRejected = null;
+                    FillerRejectFlag = false;
+                  }
+                  FillersecStop = 0;
+                  Fillersec++;
+                  Fillertime = Date.now();
+                  Fillerstate = 1;
+                  FillerflagStopped = false;
+                  FillerflagRunning = true;
+                } else if( Fillerct == Filleractual ){
+                  if(FillersecStop == 0){
+                    Fillertime = Date.now();
+                  }
+                  FillersecStop++;
+                  if(FillersecStop >= FillertimeStop){
+                    Fillerspeed = 0;
+                    Fillerstate = 2;
+                    FillerspeedTemp = Fillerct;
+                    FillerflagStopped = true;
+                    FillerflagRunning = false;
+
+                    if(CntInFiller - CntOutFiller - FillerReject.rejected != 0 && ! FillerRejectFlag){
+                      FillerdeltaRejected = CntInFiller - CntOutFiller - FillerReject.rejected;
+                      FillerReject.rejected = CntInFiller - CntOutFiller;
+                      fs.writeFileSync('FillerRejected.json','{"rejected": ' + FillerReject.rejected + '}');
+                      FillerRejectFlag = true;
+                    }else{
+                      FillerdeltaRejected = null;
+                    }
+                  }
+                  if(FillersecStop % (FillertimeStop * 3) == 0 ||FillersecStop == FillertimeStop ){
+                    FillerflagPrint=1;
+
+                    if(FillersecStop % (FillertimeStop * 3) == 0){
+                      Fillertime = Date.now();
+                      FillerdeltaRejected = null;
+                    }
+                  }
                 }
-                if( ( Date.now() - ( FillertimeStop * 1000 ) ) >= FillersecStop ){
-                  Fillerspeed = 0
-                  Fillerstate = 2
-                  FillerspeedTemp = Fillerct
-                  FillerflagStopped = true
-                  FillerflagRunning = false
-                  FillerflagPrint = 1
+                Filleractual = Fillerct;
+                if(Fillersec == FillerWorktime){
+                  Fillersec = 0;
+                  if(FillerflagRunning && Fillerct){
+                    FillerflagPrint = 1;
+                    FillersecStop = 0;
+                    Fillerspeed = Math.floor( (Fillerct - FillerspeedTemp) / (Date.now() - FillerStartTime) * 300000 );
+                    FillerspeedTemp = Fillerct;
+                  }
                 }
-              }
-              Filleractual = Fillerct
-              if(Date.now() - 60000 * FillerWorktime >= Fillersec && FillersecStop == 0){
-                if(FillerflagRunning && Fillerct){
-                  FillerflagPrint = 1
-                  FillersecStop = 0
-                  Fillerspeed = Fillerct - FillerspeedTemp
-                  FillerspeedTemp = Fillerct
-                  Fillersec = Date.now()
+                Fillerresults = {
+                  ST: Fillerstate,
+                  CPQI: CntInFiller,
+                  CPQO: CntOutFiller,
+                  CPQR: FillerdeltaRejected,
+                  SP: Fillerspeed
+                };
+                if (FillerflagPrint == 1) {
+                  for (var key in Fillerresults) {
+                    if(Fillerresults[key]!=null&&!isNaN(Fillerresults[key]))
+                    //NOTE: Cambiar path
+                    fs.appendFileSync('C:/PULSE/AM_L2/L2_LOGS/mex_cue_Filler_l2.log', 'tt=' + Fillertime + ',var=' + key + ',val=' + Fillerresults[key] + '\n');
+                  }
+                  FillerflagPrint = 0;
                 }
-              }
-              Fillerresults = {
-                ST: Fillerstate,
-                CPQI : CntInFiller,
-                CPQO : CntOutFiller,
-                SP: Fillerspeed
-              }
-              if (FillerflagPrint == 1) {
-                for (var key in Fillerresults) {
-                  if( Fillerresults[key] != null && ! isNaN(Fillerresults[key]) )
-                  //NOTE: Cambiar path
-                  fs.appendFileSync('C:/PULSE/L1_LOGS/mex_ler_Filler_l1.log', 'tt=' + Fillertime + ',var=' + key + ',val=' + Fillerresults[key] + '\n')
-                }
-                FillerflagPrint = 0
-                FillersecStop = 0
-                Fillertime = Date.now()
-              }
-        //------------------------------------------Filler----------------------------------------------
+          //------------------------------------------Filler----------------------------------------------
         });//Cierre de lectura
 
       },1000);
