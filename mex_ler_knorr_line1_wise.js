@@ -299,7 +299,7 @@ client1.on('connect', function(err) {
                   for (var key in Fillerresults) {
                     if(Fillerresults[key]!=null&&!isNaN(Fillerresults[key]))
                     //NOTE: Cambiar path
-                    fs.appendFileSync('C:/PULSE/AM_L2/L2_LOGS/mex_cue_Filler_l2.log', 'tt=' + Fillertime + ',var=' + key + ',val=' + Fillerresults[key] + '\n');
+                    fs.appendFileSync('C:/PULSE/L1_LOGS/mex_ler_Filler_l1.log', 'tt=' + Fillertime + ',var=' + key + ',val=' + Fillerresults[key] + '\n');
                   }
                   FillerflagPrint = 0;
                 }
